@@ -1,0 +1,160 @@
+---
+title: "Analysis"
+format: html
+---
+
+```{r}
+#| message: false
+library(tidyverse)
+library(arrow)
+library(DBI)
+library(MatchIt)
+library(gt)
+library(brms)
+library(mgcv)
+library(marginaleffects)
+
+con <- dbConnect(RPostgres::Postgres(),
+                 port = "5432",
+                 host = "aact-db.ctti-clinicaltrials.org",
+                 dbname = "aact")
+```
+
+
+
+# Load Trial Data
+
+```{r}
+#| message: false
+trial_data <- read_feather("data/targets.feather")
+dbWriteTable(con,
+             "study_trials",
+             trial_data,
+             temporary = TRUE,
+             overwrite = TRUE)
+```
+
+
+```{sql connection=con, output.var="trial_data", message=FALSE}
+SELECT
+    nct_id
+    , primary_completion_date
+    , primary_completion_date_type
+    , enrollment
+    , enrollment_type
+    , study_type
+    , overall_status
+FROM
+    studies
+INNER JOIN study_trials USING (nct_id)
+```
+
+
+```{sql connection=con, output.var="other_trials", message=FALSE}
+SELECT
+    nct_id
+    , primary_completion_date
+    , enrollment
+    , enrollment_type
+FROM
+    studies
+WHERE
+    study_type = 'Interventional'
+    AND overall_status = 'Completed'
+    AND primary_completion_date_type = 'Actual'
+    AND primary_completion_date >= '2003-01-01'
+```
+```{r}
+trials_matching <- 
+  trial_data |>
+  filter(overall_status %in% c("Completed", "Terminated")) |>
+  mutate(trial_year = year(primary_completion_date),
+         size = log10(enrollment),
+         drug = TRUE) |>
+  select(nct_id, trial_year, size, drug)
+
+controls_matching <- 
+  other_trials |>
+    filter(!(nct_id %in% trials_matching$nct_id)) |>
+    mutate(trial_year = year(primary_completion_date),
+           size = log10(enrollment),
+           drug = FALSE) |>
+    filter(is.finite(size)) |>
+    select(nct_id, trial_year, size, drug)
+
+matching_data <- rbind(trials_matching, controls_matching)
+```
+
+
+```{r}
+matches <- matchit(drug ~ trial_year + size, data = matching_data, method = "nearest", exact = "trial_year", ratio = 5)
+match_data <- match.data(matches) |> as_tibble()
+```
+
+```{r}
+#| message: false
+dbWriteTable(con,
+             "study_trials",
+              match_data |> as_tibble() |> select(nct_id),
+             temporary = TRUE,
+             overwrite = TRUE)
+```
+
+```{sql connection=con, output.var="trial_data", message=FALSE}
+SELECT
+    nct_id
+    , baseline_measurements.title
+    , category
+    , param_value_num
+    , number_analyzed
+FROM
+    baseline_measurements
+INNER JOIN study_trials USING (nct_id)
+LEFT JOIN result_groups USING (nct_id, ctgov_group_code)
+WHERE
+    result_groups.title IN ('Total')
+```
+
+```{r}
+trial_data |> count(title, sort = TRUE) |> slice_head(n=30) |>gt()
+```
+
+
+```{r}
+sex_data <-
+  trial_data |>
+    filter(title == 'Sex: Female, Male', category == "Female") |>
+    mutate(female_pct = param_value_num / number_analyzed) |>
+    group_by(nct_id) |>
+    slice_max(female_pct, n = 1, with_ties = FALSE) |>
+    select(nct_id, female_count = param_value_num, female_count_total = number_analyzed, female_pct)
+```
+
+```{r}
+race_data <-
+  trial_data |>
+    filter(title %in% c('Race (NIH/OMB)', 'Race/Ethnicity, Customized', 'Race'), category == 'White') |>
+    mutate(white_pct = param_value_num / number_analyzed) |>
+    group_by(nct_id) |>
+    slice_max(white_pct, n = 1, with_ties = FALSE) |>
+    select(nct_id, white_count = param_value_num, white_count_total = number_analyzed, white_pct)
+```
+
+```{r}
+fig_data <- 
+  match_data |>
+    left_join(sex_data, by = join_by(nct_id)) |>
+    left_join(race_data, by = join_by(nct_id)) |>
+    mutate(enrollment = 10 ** size)
+
+fig_data |> write_feather("data/analysis.feather")
+```
+
+
+
+
+
+
+
+
+

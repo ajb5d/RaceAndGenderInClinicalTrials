@@ -1,0 +1,13 @@
+.Rhistory
+.Rapp.history
+.RData
+.RDataTmp
+.Rproj.user/
+.httr-oauth
+.Renviron
+
+.DS_Store
+*_files/
+data/
+*.html
+*.pdf

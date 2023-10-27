@@ -1,0 +1,106 @@
+---
+title: "Analysis"
+format:
+    html:
+      code-fold: true
+---
+
+```{r}
+#| message: false
+library(tidyverse)
+library(arrow)
+library(gt)
+library(mgcv)
+library(marginaleffects)
+library(gtsummary)
+library(labelled)
+library(gratia)
+library(patchwork)
+
+fig_data <- read_feather("data/analysis.feather")
+```
+
+# Table 1
+
+```{r}
+tbl <- 
+fig_data |>
+  mutate(drug = if_else(drug, "FDA Trials", "Control Trials"),
+         trial_year = case_when(
+           trial_year < 2011 ~ " - 2011",
+           trial_year <= 2015 ~ "2011 - 2015",
+           trial_year <= 2020 ~ "2016 - 2020",
+           TRUE ~ "2021 - "
+         ),
+         female_missing = is.na(female_pct),
+         white_missing = is.na(white_pct)) |>
+  select(trial_year, enrollment, female_pct, female_missing, white_pct, white_missing, drug) |>
+  set_variable_labels(
+    trial_year = "Year of Trial Completion",
+    enrollment = "Total Participants",
+    female_pct = "Female Participants, %",
+    white_pct = "White Participants, %",
+    female_missing = "Gender Not Reported to ClinicalTrials.gov",
+    white_missing = "Race Not Reported to ClinicalTrials.gov"
+  ) |>
+  tbl_summary(by = "drug", missing = "no") |>
+  add_p()
+
+as_gt(tbl) |> gtsave("table1.html")
+tbl
+```
+
+```{r}
+p1 <- 
+  fig_data |>
+    select(enrollment, female_pct, drug) |>
+    drop_na() |>
+    ggplot(aes(enrollment, female_pct, color = drug)) +
+      geom_point() +
+      geom_smooth(method = "lm", se = FALSE, formula = y ~ x) + 
+      scale_x_continuous(trans="log10") +
+      scale_y_continuous(labels = scales::label_percent()) +
+      scale_color_manual(values = c("TRUE" = "red", "FALSE" = "black"), labels = c("TRUE" = "FDA", "FALSE" = "Control")) +
+      labs(x = "Trial Size", y = "Participant Female %", color = "Trial Type") + 
+      theme_bw(base_size = 16)
+
+
+p2 <- 
+fig_data |>
+  select(enrollment, white_pct, drug) |>
+  drop_na() |>
+  ggplot(aes(enrollment, white_pct, color = drug)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE, formula = y ~ x) + 
+    scale_x_continuous(trans="log10") +
+    scale_y_continuous(labels = scales::label_percent()) +
+    scale_color_manual(values = c("TRUE" = "red", "FALSE" = "black"), labels = c("TRUE" = "FDA", "FALSE" = "Control")) +
+    labs(x = "Trial Size", y = "Participant White %", color = "Trial Type") + 
+    theme_bw(base_size = 16)
+
+fig <- p1 + p2 + plot_layout(guides = 'collect') + plot_annotation(tag_levels = 'a') & theme(legend.position = 'bottom')
+
+ggsave("figure1.pdf", fig, width = 11, height = 8)
+fig
+```
+
+```{r}
+model <- gam(cbind(female_count,  female_count_total - female_count) ~ drug + s(size, bs = "cr", k = 5), data = fig_data, family = "binomial")
+summary(model)
+avg_slopes(model) |> tidy() |> gt()
+```
+
+```{r}
+draw(model)
+```
+
+
+```{r}
+model <- gam(cbind(white_count, white_count_total - white_count) ~ drug + s(size, bs = "cr", k = 5), data = fig_data, family = "binomial", method = "REML")
+summary(model)
+avg_slopes(model) |> tidy() |> gt()
+```
+```{r}
+draw(model)
+```
+
