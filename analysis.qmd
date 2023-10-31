@@ -87,7 +87,10 @@ fig
 ```{r}
 model <- gam(cbind(female_count,  female_count_total - female_count) ~ drug + s(size, bs = "cr", k = 5), data = fig_data, family = "binomial")
 summary(model)
-avg_slopes(model) |> tidy() |> gt()
+avg_slopes(model) |>
+  tidy() |>
+  gt() |>
+  fmt_percent(c(estimate, conf.low, conf.high))
 ```
 
 ```{r}
@@ -98,9 +101,30 @@ draw(model)
 ```{r}
 model <- gam(cbind(white_count, white_count_total - white_count) ~ drug + s(size, bs = "cr", k = 5), data = fig_data, family = "binomial", method = "REML")
 summary(model)
-avg_slopes(model) |> tidy() |> gt()
+avg_slopes(model) |>
+  tidy() |>
+  gt() |>
+  fmt_percent(c(estimate, conf.low, conf.high))
 ```
 ```{r}
 draw(model)
+```
+
+
+```{r}
+model_data <- fig_data |>
+  mutate(missing_gender = !is.na(female_count),
+         missing_race = !is.na(white_count))
+
+model_gender <- glm(missing_gender ~ drug, data = model_data, family = binomial())
+model_race <- glm(missing_race ~ drug, data = model_data, family = binomial())
+
+modelsummary::modelsummary(
+  list("gender" = model_gender, "race"= model_race),
+  conf_level = 0.95,
+  statistic = "conf.int",
+  output="gt",
+  fmt = 2,
+  exponentiate = TRUE)
 ```
 
